@@ -961,6 +961,56 @@ const curves = [
       };
     },
   },
+  {
+    name: "Cassini Oval",
+    tag: "r² = a²cos(2θ) + √(b⁴ − a²sin²(2θ))",
+    descriptionEn:
+      "A Cassini oval traces the locus where the product of distances to two foci stays constant, swelling into a peanut or figure-eight as the parameters shift.",
+    descriptionZh:
+      "卡西尼卵形线描述到两个焦点距离之积为常数的轨迹，参数变化时会在花生形与 8 字形之间变形。",
+    cassiniA: 4.2,
+    cassiniB: 5.8,
+    cassiniPulse: 0.6,
+    cassiniScale: 2.35,
+    controls: [
+      { key: "cassiniA", labelEn: "a", labelZh: "a", min: 2, max: 8, step: 0.1 },
+      { key: "cassiniB", labelEn: "b", labelZh: "b", min: 3, max: 10, step: 0.1 },
+      { key: "cassiniPulse", labelEn: "Pulse", labelZh: "呼吸量", min: 0, max: 1.5, step: 0.05 },
+      { key: "cassiniScale", labelEn: "Scale", labelZh: "缩放", min: 1.2, max: 3.5, step: 0.05 },
+    ],
+    formula(config) {
+      return [
+        `a = ${config.cassiniA.toFixed(1)} + ${config.cassiniPulse.toFixed(2)}s`,
+        `b = ${config.cassiniB.toFixed(1)}`,
+        "r²(t) = a² cos(2t) + √(b⁴ − a² sin²(2t))",
+        `x(t) = 50 + cos t · r(t) · ${config.cassiniScale.toFixed(2)}`,
+        `y(t) = 50 + sin t · r(t) · ${config.cassiniScale.toFixed(2)}`,
+      ].join("\n");
+    },
+    rotate: true,
+    particleCount: 76,
+    trailSpan: 0.37,
+    durationMs: 5800,
+    rotationDurationMs: 32000,
+    pulseDurationMs: 4800,
+    strokeWidth: 4.8,
+    point(progress, detailScale, config) {
+      const t = progress * Math.PI * 2;
+      const a = config.cassiniA + detailScale * config.cassiniPulse;
+      const b = config.cassiniB;
+      const sin2t = Math.sin(2 * t);
+      const cos2t = Math.cos(2 * t);
+      const inner = b ** 4 - a * a * sin2t * sin2t;
+      const r2 = a * a * cos2t + Math.sqrt(Math.max(0, inner));
+      const r = Math.sqrt(Math.max(0, r2));
+      return {
+        x: 50 + Math.cos(t) * r * config.cassiniScale,
+        y: 50 + Math.sin(t) * r * config.cassiniScale,
+      };
+    },
+  },
+  ...(window.CELTIC_ROW1_CURVES ?? []),
+  ...(window.CELTIC_ROWS_2_4_CURVES ?? []),
 ];
 
 function normalizeProgress(progress) {
@@ -1188,6 +1238,10 @@ function serializeCurveValue(value) {
 }
 
 function formatCurveRuntimeObject(config) {
+  if (config.pathBased) {
+    return formatPathCurveRuntimeObject(config);
+  }
+
   const formulaSource =
     typeof config.formula === "function"
       ? config.formula.toString()
@@ -1227,7 +1281,66 @@ function formatCurveRuntimeObject(config) {
   ].join("\n");
 }
 
+function formatPathCurveRuntimeObject(config) {
+  const orderedKeys = [
+    "name",
+    "tag",
+    "pathBased",
+    "pathD",
+    "breathe",
+    "targetSize",
+    "rotate",
+    "particleCount",
+    "trailSpan",
+    "durationMs",
+    "rotationDurationMs",
+    "pulseDurationMs",
+    "strokeWidth",
+  ];
+  const skipKeys = new Set([
+    ...orderedKeys,
+    "descriptionEn",
+    "descriptionZh",
+    "controls",
+    "formula",
+    "point",
+    "_pathSampler",
+    "_defaultSampler",
+  ]);
+  const dynamicKeys = Object.keys(config).filter((key) => !skipKeys.has(key));
+  const scalarKeys = [...orderedKeys, ...dynamicKeys].filter((key) => key in config);
+  const scalarLines = scalarKeys.map((key) => `  ${key}: ${serializeCurveValue(config[key])},`);
+  const formulaSource =
+    typeof config.formula === "function"
+      ? config.formula.toString()
+      : `formula: () => ${serializeCurveValue(config.formula)}`;
+
+  return [
+    `const config = {`,
+    ...scalarLines,
+    `  ${formulaSource},`,
+    `  point(progress, detailScale, config) {`,
+    `    if (`,
+    `      !config._pathSampler ||`,
+    `      config._pathSamplerBreathe !== config.breathe ||`,
+    `      config._pathSamplerSize !== config.targetSize`,
+    `    ) {`,
+    `      config._pathSampler = createPathSampler(config.pathD, {`,
+    `        breathe: config.breathe,`,
+    `        targetSize: config.targetSize,`,
+    `      });`,
+    `      config._pathSamplerBreathe = config.breathe;`,
+    `      config._pathSamplerSize = config.targetSize;`,
+    `    }`,
+    `    return config._pathSampler.point(progress, detailScale);`,
+    `  },`,
+    `};`,
+  ].join("\n");
+}
+
 function formatCurveCode(config) {
+  const pathSamplerPrefix =
+    config.pathBased && window.PathSampler ? `${window.PathSampler.getExportSource()}\n\n` : "";
   const runtimeObject = formatCurveRuntimeObject(config);
 
   return [
@@ -1330,6 +1443,7 @@ function formatCurveCode(config) {
     "  </div>",
     "  <script>",
     "    const SVG_NS = 'http://www.w3.org/2000/svg';",
+    `    ${pathSamplerPrefix}`,
     `    ${runtimeObject}`,
     "    const group = document.querySelector('#group');",
     "    const path = document.querySelector('#path');",
